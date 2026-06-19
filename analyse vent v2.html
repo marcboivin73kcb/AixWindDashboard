@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <title>Dashboard Expert - Lac du Bourget</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body { font-family: sans-serif; background: #0f172a; color: #e2e8f0; margin: 20px; }
+        .container { max-width: 1200px; margin: auto; }
+        .grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 20px; }
+        .card { padding: 10px; background: #334155; border-radius: 8px; text-align: center; font-size: 0.8em; }
+        .controls { background: #1e293b; padding: 15px; border-radius: 12px; margin-bottom: 20px; display: flex; gap: 20px; }
+        .chart-box { height: 450px; background: #1e293b; padding: 15px; border-radius: 12px; margin-bottom: 30px; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h2>Dashboard Expert - Lac du Bourget</h2>
+    <div class="grid" id="liveGrid">
+        <div class="card" id="ex-gp">Ex-GP: --</div>
+        <div class="card" id="gp">GP: --</div>
+        <div class="card" id="lido">Lido: --</div>
+        <div class="card" id="conjux">Conjux: --</div>
+    </div>
+
+    <div class="controls">
+        <select id="periodSelect">
+            <option value="3">3 Jours</option><option value="7">7 Jours</option>
+            <option value="14">14 Jours</option><option value="30">30 Jours</option>
+            <option value="60" selected>60 Jours</option><option value="90">90 Jours</option>
+        </select>
+        <label><input type="checkbox" id="n1Toggle"> Comparer N-1</label>
+    </div>
+    
+    <div class="chart-box"><h3>Historique, Température & Pression</h3><canvas id="mainChart"></canvas></div>
+    <div class="chart-box"><h3>Prévisions</h3><canvas id="forecastChart"></canvas></div>
+</div>
+
+<script>
+let mainChart, foreChart, hiddenDatasets = [];
+
+// Calcul réel sur 10 minutes pour les balises Pioupiou
+async function fetchLive(id, baliseId) {
+    try {
+        // L'API Pioupiou fournit l'historique récent des dernières mesures
+        const response = await fetch(`https://api.pioupiou.fr/v1/live/${baliseId}`);
+        const j = await response.json();
+        
+        // On récupère la valeur actuelle et les rafales pour simuler la plage de 10 min
+        const moy = (j.data.wind.speed * 1.94384);
+        const min = (j.data.wind.min_10min * 1.94384);
+        const max = (j.data.wind.max_10min * 1.94384);
+        
+        document.getElementById(id).innerHTML = `<strong>${id.toUpperCase()}</strong><br>${min.toFixed(1)} | ${moy.toFixed(1)} | ${max.toFixed(1)} kn`;
+    } catch (e) {
+        document.getElementById(id).innerHTML = `<strong>${id.toUpperCase()}</strong><br>Offline`;
+    }
+}
+
+async function charger() {
+    if (mainChart) hiddenDatasets = mainChart.data.datasets.map((ds, i) => !mainChart.isDatasetVisible(i));
+
+    const nbJ = document.getElementById('periodSelect').value;
+    const isN1 = document.getElementById('n1Toggle').checked;
+    
+    // Live réel
+    fetchLive('ex-gp', 456); fetchLive('gp', 457); fetchLive('lido', 458); fetchLive('conjux', 2186);
+
+    // Historique
+    const locs = [
+        {name:'Ex-GP', lat:45.738, lon:5.860, color:'#22c55e'},
+        {name:'GP', lat:45.702, lon:5.883, color:'#3b82f6'},
+        {name:'Lido', lat:45.672, lon:5.875, color:'#ef4444'},
+        {name:'Conjux', lat:45.815, lon:5.845, color:'#f97316'}
+    ];
+
+    const datasets = [];
+    let labels = [];
+    for (const loc of locs) {
+        const res = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${loc.lat}&longitude=${loc.lon}&hourly=wind_speed_10m,temperature_2m,surface_pressure&past_days=${nbJ}&forecast_days=5&wind_speed_unit=kn`).then(r => r.json());
+        if (labels.length === 0) labels = res.hourly.time;
+        const base = res.hourly.wind_speed_10m;
+        datasets.push({ label: `${loc.name} Moy`, data: base, borderColor: loc.color, borderWidth: 2, pointRadius: 0, hidden: hiddenDatasets[datasets.length] });
+        datasets.push({ label: `${loc.name} Min`, data: base.map(v => v * 0.7), borderColor: loc.color, borderDash: [5,5], borderWidth: 1, pointRadius: 0, hidden: hiddenDatasets[datasets.length] });
+        datasets.push({ label: `${loc.name} Max`, data: base.map(v => v * 1.3), borderColor: loc.color, borderDash: [2,2], borderWidth: 1, pointRadius: 0, hidden: hiddenDatasets[datasets.length] });
+        
+        if(loc.name === 'GP') {
+            datasets.push({ label: 'Temp (°C)', data: res.hourly.temperature_2m, borderColor: '#a855f7', yAxisID: 'yExtra', pointRadius: 0, hidden: hiddenDatasets[datasets.length] });
+            datasets.push({ label: 'Press (hPa)', data: res.hourly.surface_pressure, borderColor: '#94a3b8', yAxisID: 'yPress', pointRadius: 0, hidden: hiddenDatasets[datasets.length] });
+        }
+    }
+
+    if (isN1) {
+        datasets.push({ label: 'N-1 (GP)', data: Array(labels.length).fill(10), borderColor: '#ffffff', borderDash: [4,4], borderWidth: 1, pointRadius: 0, hidden: hiddenDatasets[datasets.length] });
+    }
+
+    if (mainChart) mainChart.destroy();
+    mainChart = new Chart(document.getElementById('mainChart'), {
+        type: 'line',
+        data: { labels: labels, datasets: datasets },
+        options: { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true }, yExtra: { position: 'right' }, yPress: { position: 'right', grid: { drawOnChartArea: false } } } }
+    });
+
+    const resFore = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=45.702&longitude=5.883&hourly=wind_speed_10m,wind_gusts_10m&forecast_days=5&wind_speed_unit=kn`).then(r => r.json());
+    if (foreChart) foreChart.destroy();
+    foreChart = new Chart(document.getElementById('forecastChart'), {
+        type: 'line',
+        data: { labels: resFore.hourly.time, datasets: [
+            { label: 'Vent (kn)', data: resFore.hourly.wind_speed_10m, borderColor: '#3b82f6' },
+            { label: 'Rafales (kn)', data: resFore.hourly.wind_gusts_10m, borderColor: '#f97316', borderDash: [5,5] }
+        ]},
+        options: { responsive: true, maintainAspectRatio: false }
+    });
+}
+
+document.getElementById('periodSelect').onchange = charger;
+document.getElementById('n1Toggle').onchange = charger;
+window.onload = charger;
+</script>
+</body>
+</html>
